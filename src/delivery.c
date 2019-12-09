@@ -20,10 +20,11 @@ void handle_signal(int sig_type) {
 		printf("beginning clean server shutdown due to interrupt ...\n");
 		interrupt = true;
 	}
+
 	return;
 }
 
-/* accept a client waiting its turn  */
+/* accept a client and add it to the epoll interest list  */
 int accept_client(int server_socket, int epoll_fd) {
 	int client_socket;
 	unsigned int client_length;
@@ -32,7 +33,6 @@ int accept_client(int server_socket, int epoll_fd) {
 
 	/* here's the actual accepting part */
 	if((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_length)) < 0) {
-		if(interrupt == true) return -1;	// is a nested conditional the best way to do this?
 		fprintf(stderr, "failed to accept a client\n");
 		return -1;
 	}
@@ -74,7 +74,7 @@ void handle_client(int client_socket) {
 	if((strcmp(recv_buffer, "flag{flag}\n")) != 0) send(client_socket, "wrong flag!\n", 16, 0);
 	else send(client_socket, "correct flag!\n", 16, 0);
 
-	close(client_socket);
+	close(client_socket);	// file descriptor is automatically removed from interest list upon closing
 }
 
 int main(void) {
@@ -131,7 +131,7 @@ int main(void) {
 	}
 
 	/* epoll setup */
-	if((epoll_fd = epoll_create(MAX_CLIENTS + 1)) < 0) {
+	if((epoll_fd = epoll_create(MAX_CLIENTS + 1)) < 0) {	// size argument to epoll_create() is ignored, but required
 		fprintf(stderr, "failed to create epoll file descriptor\n");
 		close(server_socket);
 		exit(1);
@@ -147,16 +147,16 @@ int main(void) {
 		exit(1);
 	}
 
-	/* main loop (probably just implement one client to start, and then expand) */
+	/* main loop; blocks on epoll_wait() and then either accepts a new client or handles client data for "ready" sockets */
 	while(interrupt != true) {
-		//if((client_socket = accept_client(server_socket)) >= 0) handle_client(client_socket);	// you can make this more sophisticated later
 
+		/* block until an arbitrary amount of sockets are "ready" */
 		if((number_fds = epoll_wait(epoll_fd, ready_sockets, MAX_CLIENTS + 1, -1)) < 0) {
 			fprintf(stderr, "failed on epoll_wait() for some reason, probably due to SIGINT\n");
 			continue;
 		}
 
-		/* loop through ready sockets */
+		/* loop through "ready" sockets */
 		for(int i = 0; i < number_fds; ++i) {
 			if((tmp_fd = ready_sockets[i].data.fd) == server_socket) accept_client(server_socket, epoll_fd);	// a new client is trying to connect
 			else handle_client(tmp_fd);	// a client has sent data

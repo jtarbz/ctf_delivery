@@ -4,26 +4,31 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <sys/socket.h>
+#include <sys/epoll.h>
 #include <arpa/inet.h>
 #include <signal.h>
 
 #define PORT 4747
+#define MAX_CLIENTS 256
 #define RECV_SIZE 64
 
 bool interrupt = false;	// this guy lets the main loop know when it's time to shut down ***gracefully***
 
 /* custom signal handler for graceful shutdown purposes */
 void handle_signal(int sig_type) {
-	printf("beginning clean server shutdown due to interrupt ...\n");
-	interrupt = true;
+	if(sig_type == SIGINT) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
+		printf("beginning clean server shutdown due to interrupt ...\n");
+		interrupt = true;
+	}
 	return;
 }
 
 /* accept a client waiting its turn  */
-int accept_client(int server_socket) {
+int accept_client(int server_socket, int epoll_fd) {
 	int client_socket;
-	struct sockaddr_in client_addr;
 	unsigned int client_length;
+	struct sockaddr_in client_addr;
+	struct epoll_event client_event;
 
 	/* here's the actual accepting part */
 	if((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_length)) < 0) {
@@ -32,7 +37,16 @@ int accept_client(int server_socket) {
 		return -1;
 	}
 
-	printf("handling client %s\n", inet_ntoa(client_addr.sin_addr));
+	/* add client socket to epoll interest list */
+	client_event.events = EPOLLIN;
+	client_event.data.fd = client_socket;
+	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &client_event) < 0) {
+		fprintf(stderr, "failed to add client to interest list");
+		close(client_socket);
+		return -1;
+	}
+
+	printf("accepted client %s\n", inet_ntoa(client_addr.sin_addr));
 	return client_socket;
 }
 
@@ -64,8 +78,10 @@ void handle_client(int client_socket) {
 }
 
 int main(void) {
-	int client_socket, server_socket;
+	int client_socket, server_socket, epoll_fd, number_fds, tmp_fd;
 	struct sockaddr_in server_addr;
+	struct epoll_event listener_event;
+	struct epoll_event ready_sockets[MAX_CLIENTS + 1];	// leave room for the listener
 
 	/* set custom handler for SIGINT */
 	struct sigaction handler;
@@ -74,9 +90,16 @@ int main(void) {
 		fprintf(stderr, "failed to set signal masks\n");
 		exit(1);
 	}
+
 	handler.sa_flags = 0;	// no sa_flags
 	if(sigaction(SIGINT, &handler, 0) < 0) {
 		fprintf(stderr, "failed to set new handler for SIGINT\n");
+		exit(1);
+	}
+
+	/* set custom handler for SIGPIPE; uses same handler as SIGINT but gets ignored */
+	if(sigaction(SIGPIPE, &handler, 0) < 0) {
+		fprintf(stderr, "failed to set new handler for SIGPIPE\n");
 		exit(1);
 	}
 
@@ -107,10 +130,41 @@ int main(void) {
 		exit(1);
 	}
 
-	/* main loop (probably just implement one client to start, and then expand) */
-	while(interrupt != true) if((client_socket = accept_client(server_socket)) >= 0) handle_client(client_socket);	// you can make this more sophisticated later
+	/* epoll setup */
+	if((epoll_fd = epoll_create(MAX_CLIENTS + 1)) < 0) {
+		fprintf(stderr, "failed to create epoll file descriptor\n");
+		close(server_socket);
+		exit(1);
+	}
 
-	/* execute upon interrupt */
+	/* add listener to epoll interest list */
+	listener_event.events = EPOLLIN;
+	listener_event.data.fd = server_socket;
+	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_socket, &listener_event) < 0) {
+		fprintf(stderr, "failed to add listener to interest list\n");
+		close(epoll_fd);
+		close(server_socket);
+		exit(1);
+	}
+
+	/* main loop (probably just implement one client to start, and then expand) */
+	while(interrupt != true) {
+		//if((client_socket = accept_client(server_socket)) >= 0) handle_client(client_socket);	// you can make this more sophisticated later
+
+		if((number_fds = epoll_wait(epoll_fd, ready_sockets, MAX_CLIENTS + 1, -1)) < 0) {
+			fprintf(stderr, "failed on epoll_wait() for some reason, probably due to SIGINT\n");
+			continue;
+		}
+
+		/* loop through ready sockets */
+		for(int i = 0; i < number_fds; ++i) {
+			if((tmp_fd = ready_sockets[i].data.fd) == server_socket) accept_client(server_socket, epoll_fd);	// a new client is trying to connect
+			else handle_client(tmp_fd);	// a client has sent data
+		}
+	}
+
+	/* execute upon interrupt or epoll_wait() failure */
+	close(epoll_fd);
 	close(server_socket);
 	exit(0);
 }

@@ -46,7 +46,6 @@ int accept_client(int server_socket, int epoll_fd) {
 		return -1;
 	}
 
-	printf("accepted client %s\n", inet_ntoa(client_addr.sin_addr));
 	return client_socket;
 }
 

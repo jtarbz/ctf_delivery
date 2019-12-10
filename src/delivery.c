@@ -78,10 +78,12 @@ void handle_client(int client_socket) {
 }
 
 int main(void) {
-	int client_socket, server_socket, epoll_fd, number_fds, tmp_fd;
+	int client_socket, server_socket, client_registry[MAX_CLIENTS], epoll_fd, number_fds, tmp_fd;
 	struct sockaddr_in server_addr;
 	struct epoll_event listener_event;
 	struct epoll_event ready_sockets[MAX_CLIENTS + 1];	// leave room for the listener
+
+	memset(client_registry, 0, sizeof(int) * MAX_CLIENTS);	// zero out registry to ensure things work smoothly in main loop
 
 	/* set custom handler for SIGINT */
 	struct sigaction handler;
@@ -158,12 +160,42 @@ int main(void) {
 
 		/* loop through "ready" sockets */
 		for(int i = 0; i < number_fds; ++i) {
-			if((tmp_fd = ready_sockets[i].data.fd) == server_socket) accept_client(server_socket, epoll_fd);	// a new client is trying to connect
-			else handle_client(tmp_fd);	// a client has sent data
+			if((tmp_fd = ready_sockets[i].data.fd) == server_socket) {	// a new client is trying to connect
+				tmp_fd = accept_client(server_socket, epoll_fd);
+
+				/* add new client to registry */
+				for(int i = 0; i < MAX_CLIENTS; ++i) {
+					if(client_registry[i] == 0) {	// this isn't ideal, but works for our purposes
+						client_registry[i] = tmp_fd;
+						break;
+					}
+
+					if(i == MAX_CLIENTS - 1) {	// execute if array is full
+						send(tmp_fd, "too many clients! try again later ...\n", 48, 0);
+						close(tmp_fd);
+					}
+				}
+			}
+
+			else {	// a client has sent data
+				handle_client(tmp_fd);
+
+				/* remove client from registry */
+				for(int i = 0; i < MAX_CLIENTS; ++i) {
+					if(client_registry[i] == tmp_fd) {
+						close(tmp_fd);
+						client_registry[i] = 0;
+						break;
+					}
+				}
+			}
 		}
 	}
 
 	/* execute upon interrupt or epoll_wait() failure */
+
+	for(int i = 0; i < MAX_CLIENTS; ++i) if(client_registry[i] != 0) close(client_registry[i]);	// clean up registered clients
+
 	close(epoll_fd);
 	close(server_socket);
 	exit(0);

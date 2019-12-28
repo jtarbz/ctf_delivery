@@ -16,7 +16,7 @@ bool interrupt = false;	// this guy lets the main loop know when it's time to sh
 
 /* custom signal handler for graceful shutdown purposes */
 void handle_signal(int sig_type) {
-	if(sig_type == SIGINT) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
+	if(sig_type == SIGINT || sigtype == SIGKILL) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
 		printf("beginning clean server shutdown due to interrupt ...\n");
 		interrupt = true;
 	}
@@ -95,6 +95,12 @@ int main(void) {
 	handler.sa_flags = 0;	// no sa_flags
 	if(sigaction(SIGINT, &handler, 0) < 0) {
 		fprintf(stderr, "failed to set new handler for SIGINT\n");
+		exit(1);
+	}
+	
+	/* set custom handler for SIGKILL; uses same handler as SIGINT, meant to play nicely with controller */
+	if(sigaction(SIGKILL, &handler, 0) < 0) {
+		fprintf(stderr, "failed to set new handler for SIGKILL\n");
 		exit(1);
 	}
 

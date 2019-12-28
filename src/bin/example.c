@@ -115,7 +115,7 @@ int main(void) {
 		exit(1);
 	}
 
-	memset(&server_addr, 0, sizeof server_addr);	// zero out to prevent ~~BAD VOODOO~~
+	memset(&server_addr, 0, sizeof(struct sockaddr_in));	// zero out to prevent ~~BAD VOODOO~~
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	server_addr.sin_port = htons(PORT);
@@ -160,7 +160,10 @@ int main(void) {
 		/* loop through "ready" sockets */
 		for(int i = 0; i < number_fds; ++i) {
 			if((tmp_fd = ready_sockets[i].data.fd) == server_socket) {	// a new client is trying to connect
-				tmp_fd = accept_client(server_socket, epoll_fd);
+				if((tmp_fd = accept_client(server_socket, epoll_fd)) < 0) {
+					fprintf(stderr, "failed to accept client socket\n");
+					exit(1);
+				}
 
 				/* add new client to registry */
 				for(int i = 0; i < MAX_CLIENTS; ++i) {
@@ -192,9 +195,7 @@ int main(void) {
 	}
 
 	/* execute upon interrupt or epoll_wait() failure */
-
 	for(int i = 0; i < MAX_CLIENTS; ++i) if(client_registry[i] != 0) close(client_registry[i]);	// clean up registered clients
-
 	close(epoll_fd);
 	close(server_socket);
 	exit(0);

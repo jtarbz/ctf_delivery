@@ -16,7 +16,7 @@ bool interrupt = false;	// this guy lets the main loop know when it's time to sh
 
 /* custom signal handler for graceful shutdown purposes */
 void handle_signal(int sig_type) {
-	if(sig_type == SIGINT || sigtype == SIGKILL) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
+	if(sig_type == SIGINT || sig_type == SIGKILL) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
 		printf("beginning clean server shutdown due to interrupt ...\n");
 		interrupt = true;
 	}

@@ -25,15 +25,15 @@ typedef struct module {
 } module;
 
 /* start a module given its file descriptor, and return the resulting process' pid */
-int start_module(int fd) {
+int start_module(int fd, char *name) {
 	int pid = fork();
-	char *dumb_required_argument[] = {"stupid dumb idiot argument", 0};
+	char *dumb_required_argument[] = {name, 0};
 	
 	if(pid == 0) {
 		fexecve(fd, dumb_required_argument, dumb_required_argument);
 		/* successful call never returns ... */
 		fprintf(stderr, "call to fexecve returned, meaning that something went horribly wrong\n");
-		perror("i hope this gives me more info: ");
+		perror("guru meditation");
 		exit(1);
 	}
 	
@@ -43,11 +43,12 @@ int start_module(int fd) {
 /* receive data from the client and return a structure containing operation information and argument */ 
 int handle_input(int server_socket, module *module_registry) {
 	input client_input;	// operation and argument sent from client
-	struct sockaddr_un client_address;
-	unsigned int cl_address_len;
+	struct sockaddr client_address;
+	unsigned int cl_address_len = sizeof(struct sockaddr);
 	
-	if(recvfrom(server_socket, &client_input, sizeof(input), 0, (struct sockaddr *)&client_address, &cl_address_len) < 0) {
+	if(recvfrom(server_socket, &client_input, sizeof(input), 0, &client_address, &cl_address_len) < 0) {
 		fprintf(stderr, "failed to receive from datagram socket\n");
+		perror("guru meditation");
 		return 0;
 	}
 	
@@ -67,7 +68,7 @@ int handle_input(int server_socket, module *module_registry) {
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
 				if(strcmp(module_registry[i].name, client_input.arg) == 0) {
 					if(module_registry[i].state == false) {
-						module_registry[i].pid = start_module(module_registry[i].fd);
+						module_registry[i].pid = start_module(module_registry[i].fd, module_registry[i].name);
 						module_registry[i].state = true;
 					}
 					
@@ -80,7 +81,7 @@ int handle_input(int server_socket, module *module_registry) {
 		case 1:		// start all modules
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
 				if(module_registry[i].state == false) { 
-					module_registry[i].pid = start_module(module_registry[i].fd);
+					module_registry[i].pid = start_module(module_registry[i].fd, module_registry[i].name);
 					module_registry[i].state = true;
 				}					 
 			}
@@ -144,7 +145,7 @@ int handle_input(int server_socket, module *module_registry) {
 							exit(1);
 						}
 						
-						module_registry[i].pid = start_module(module_registry[i].fd);
+						module_registry[i].pid = start_module(module_registry[i].fd, module_registry[i].name);
 					}
 				}
 			}
@@ -159,7 +160,7 @@ int handle_input(int server_socket, module *module_registry) {
 						exit(1);
 					}
 					
-					module_registry[i].pid = start_module(module_registry[i].fd);
+					module_registry[i].pid = start_module(module_registry[i].fd, module_registry[i].name);
 					
 					break;	
 				}
@@ -242,8 +243,9 @@ int main() {
         }
 
 	/* attempt to unlink any file residing in SOCK_PATH */
-	if(remove(SOCK_PATH) < 0 && errno != ENOENT) {
+	if(unlink(SOCK_PATH) < 0 && errno != ENOENT) {
 		fprintf(stderr, "failed to remove file at %s", SOCK_PATH);
+		perror("guru meditation");
 		exit(1);
 	}
 
@@ -258,12 +260,26 @@ int main() {
 
 	if(bind(server_socket, (struct sockaddr *)&server_addr, sizeof(struct sockaddr_un)) < 0) {
 		fprintf(stderr, "failed to bind server socket\n");
+		perror("guru meditation");
 		exit(1);
 	}
 
 	/* main loop - wait for input */
 	while(daemon_state == 0) daemon_state = handle_input(server_socket, module_registry);
 	
+	/* shut down all child processes */
+	for(int i = 0; module_registry[i].fd != 0; ++i) {
+		if(module_registry[i].state == true) {
+			if(kill(module_registry[i].pid, SIGTERM) < 0) {
+				fprintf(stderr, "failed to kill a child process\n");
+				exit(1);
+			}
+
+			module_registry[i].state = false;
+		}
+
+	}
+
 	
 	/*  close all fds */
 	for(int i = 0; module_registry[i].fd != 0; ++i) close(module_registry[i].fd);

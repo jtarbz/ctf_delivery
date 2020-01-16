@@ -16,7 +16,7 @@ bool interrupt = false;	// this guy lets the main loop know when it's time to sh
 
 /* custom signal handler for graceful shutdown purposes */
 void handle_signal(int sig_type) {
-	if(sig_type == SIGINT || sig_type == SIGKILL) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
+	if(sig_type == SIGINT || sig_type == SIGTERM) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
 		printf("beginning clean server shutdown due to interrupt ...\n");
 		interrupt = true;
 	}
@@ -98,9 +98,9 @@ int main(void) {
 		exit(1);
 	}
 	
-	/* set custom handler for SIGKILL; uses same handler as SIGINT, meant to play nicely with controller */
-	if(sigaction(SIGKILL, &handler, 0) < 0) {
-		fprintf(stderr, "failed to set new handler for SIGKILL\n");
+	/* set custom handler for SIGTERM; uses same handler as SIGINT, meant to play nicely with controller */
+	if(sigaction(SIGTERM, &handler, 0) < 0) {
+		fprintf(stderr, "failed to set new handler for SIGTERM\n");
 		exit(1);
 	}
 
@@ -129,6 +129,7 @@ int main(void) {
 	/* bind and listen */
 	if(bind(server_socket, (struct sockaddr *)&server_addr, sizeof server_addr) < 0) {
 		fprintf(stderr, "failed to bind socket to port\n");
+		perror("guru meditation");
 		exit(1);
 	}
 

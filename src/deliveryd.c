@@ -11,9 +11,9 @@
 #include <signal.h>
 #include <errno.h>
 
+#include "delivery.h"
+
 #define MAX_MODULES 64
-#define MODULE_NAME_LENGTH 16
-#define SOCK_PATH "/tmp/deliveryd.sock"	// technically insecure, can be changed or secured by implementation
 
 /* structure for holding module information */
 typedef struct module {
@@ -24,32 +24,16 @@ typedef struct module {
 	bool state;
 } module;
 
-/* enumerated list of possible operations to be passed to the daemon */
-typedef enum {
-	start = 0,
-	startall = 1,
-	stop = 2,
-	stoppid = 3,
-	stopall = 4,
-	restart = 5,
-	restartpid = 6,
-	shutdown_proc = 7,
-	status = 8
-} operator;
-
-/* structure for holding input information */
-typedef struct input {
-	operator op;
-	char arg[MODULE_NAME_LENGTH];
-} input;
-
 /* start a module given its file descriptor, and return the resulting process' pid */
 int start_module(int fd) {
 	int pid = fork();
+	char *dumb_required_argument[] = {"stupid dumb idiot argument", 0};
+	
 	if(pid == 0) {
-		fexecve(fd, NULL, NULL);
+		fexecve(fd, dumb_required_argument, dumb_required_argument);
 		/* successful call never returns ... */
 		fprintf(stderr, "call to fexecve returned, meaning that something went horribly wrong\n");
+		perror("i hope this gives me more info: ");
 		exit(1);
 	}
 	
@@ -64,7 +48,7 @@ int handle_input(int server_socket, module *module_registry) {
 	
 	if(recvfrom(server_socket, &client_input, sizeof(input), 0, (struct sockaddr *)&client_address, &cl_address_len) < 0) {
 		fprintf(stderr, "failed to receive from datagram socket\n");
-		exit(1);
+		return 0;
 	}
 	
 	/* poll to see if any children have changed state before performing an operation */
@@ -107,7 +91,7 @@ int handle_input(int server_socket, module *module_registry) {
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
 				if(strcmp(module_registry[i].name, client_input.arg) == 0) {
 					if(module_registry[i].state == true) {
-						if(kill(module_registry[i].pid, SIGKILL) < 0) {
+						if(kill(module_registry[i].pid, SIGTERM) < 0) {
 							fprintf(stderr, "failed to kill a child process\n");
 							exit(1);
 						}
@@ -124,7 +108,7 @@ int handle_input(int server_socket, module *module_registry) {
 		case 3:		// stop module by pid
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
 				if(module_registry[i].pid == atoi(client_input.arg) && module_registry[i].state == true) {
-					if(kill(module_registry[i].pid, SIGKILL) < 0) {
+					if(kill(module_registry[i].pid, SIGTERM) < 0) {
 						fprintf(stderr, "failed to kill a child process\n");
 						exit(1);
 					}
@@ -139,7 +123,7 @@ int handle_input(int server_socket, module *module_registry) {
 		case 4:		// stop all modules
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
 				if(module_registry[i].state == true) {
-					if(kill(module_registry[i].pid, SIGKILL) < 0) {
+					if(kill(module_registry[i].pid, SIGTERM) < 0) {
 						fprintf(stderr, "failed to kill a child process\n");
 						exit(1);
 					}
@@ -155,7 +139,7 @@ int handle_input(int server_socket, module *module_registry) {
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
 				if(strcmp(module_registry[i].name, client_input.arg) == 0) {
 					if(module_registry[i].state == true) {
-						if(kill(module_registry[i].pid, SIGKILL) < 0) {
+						if(kill(module_registry[i].pid, SIGTERM) < 0) {
 							fprintf(stderr, "failed to kill a child process during restart\n");
 							exit(1);
 						}
@@ -170,7 +154,7 @@ int handle_input(int server_socket, module *module_registry) {
 		case 6: 	// restart module by pid
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
 				if(module_registry[i].pid == atoi(client_input.arg) && module_registry[i].state == true) {
-					if(kill(module_registry[i].pid, SIGKILL) < 0) {
+					if(kill(module_registry[i].pid, SIGTERM) < 0) {
 						fprintf(stderr, "failed to kill a child process during restart\n");
 						exit(1);
 					}
@@ -188,7 +172,7 @@ int handle_input(int server_socket, module *module_registry) {
 		case 8:		// return a general status for the daemon
 			/* systematically print module names, ports, and states/pids */
 			for(int i = 0; module_registry[i].fd != 0; ++i) {
-				printf("%-16s %8d active: %d\n", module_registry[i].name, module_registry[i].port, module_registry[i].state == true ? module_registry[i].pid : false);
+				printf("%s:%d active: %d\n", module_registry[i].name, module_registry[i].port, module_registry[i].state == true ? module_registry[i].pid : false);
 			}
 			
 			break;
@@ -278,7 +262,7 @@ int main() {
 	}
 
 	/* main loop - wait for input */
-	while(daemon_state == 0) daemon_state =  handle_input(server_socket, module_registry);
+	while(daemon_state == 0) daemon_state = handle_input(server_socket, module_registry);
 	
 	
 	/*  close all fds */

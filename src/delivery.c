@@ -2,200 +2,122 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdbool.h>
+#include <fcntl.h>
+#include <sys/un.h>
 #include <sys/socket.h>
-#include <sys/epoll.h>
-#include <arpa/inet.h>
-#include <signal.h>
+#include <errno.h>
 
-#define PORT 4747
-#define MAX_CLIENTS 256
-#define RECV_SIZE 64
+#include "delivery.h"
 
-bool interrupt = false;	// this guy lets the main loop know when it's time to shut down ***gracefully***
-
-/* custom signal handler for graceful shutdown purposes */
-void handle_signal(int sig_type) {
-	if(sig_type == SIGINT) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
-		printf("beginning clean server shutdown due to interrupt ...\n");
-		interrupt = true;
-	}
-
-	return;
+/* print help message and exit */
+void print_help(void) {
+    printf("usage:\tdelivery [option] [argument]\n \
+    options:\n \
+        start\t\tstart a module by name\n \
+        startall\tstart all modules\n \
+        stop\t\tstop a module by name\n \
+        stoppid\tstop a module by pid\n \
+        stopall\tstop all modules\n \
+        restart\trestart a module by name\n \
+        restartpid\trestart a module by pid\n \
+        shutdown_proc\tshutdown the daemon\n \
+        status\t\tdisplay a status of the daemon\n\n \
+    modules should be in the standard form - see the README for help\n \
+    created by jason walter\n");
+    
+    exit(0);
 }
 
-/* accept a client and add it to the epoll interest list  */
-int accept_client(int server_socket, int epoll_fd) {
-	int client_socket;
-	unsigned int client_length;
-	struct sockaddr_in client_addr;
-	struct epoll_event client_event;
+int main(int argc, char **argv) {
+    input client_input;
+    int client_socket;
+    struct sockaddr_un client_addr, server_addr;
+    char *answer = malloc(128);
+    
+    if(argc < 2) print_help();
 
-	/* here's the actual accepting part */
-	if((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_length)) < 0) {
-		fprintf(stderr, "failed to accept a client\n");
-		return -1;
-	}
+    /* massive set of argument conditionals ;) */
+    
+    /* start module by name */
+    if(strcmp(argv[1], "start") == 0) {
+        client_input.op = start;
+        snprintf(client_input.arg, MODULE_NAME_LENGTH, "%s", argv[2]);
+    }
+    /* start all modules */
+    else if(strcmp(argv[1], "startall") == 0) client_input.op = startall;
+    /* stop module by name */
+    else if(strcmp(argv[1], "stop") == 0) {
+        client_input.op = stop;
+        snprintf(client_input.arg, MODULE_NAME_LENGTH, "%s", argv[2]);
+    }
+    /* stop module by pid */
+    else if(strcmp(argv[1], "stoppid") == 0) {
+        client_input.op = stoppid;
+        snprintf(client_input.arg, 6, "%s", argv[2]);
+    }
+    /* stop all modules */
+    else if(strcmp(argv[1], "stopall") == 0) client_input.op = stopall;
+    /* restart module by name */
+    else if(strcmp(argv[1], "restart") == 0) {
+        client_input.op = restart;
+        snprintf(client_input.arg, MODULE_NAME_LENGTH, "%s", argv[2]);
+    }
+    /* restart module by pid */
+    else if(strcmp(argv[1], "restartpid") == 0) {
+        client_input.op = restartpid;
+        snprintf(client_input.arg, 6, "%s", argv[2]);
+    }
+    /* shutdown daemon */
+    else if(strcmp(argv[1], "shutdown_proc") == 0) client_input.op = shutdown_proc;
+    /* display daemon status */
+    else if(strcmp(argv[1], "status") == 0) client_input.op = status;
+    /* your input doesn't exist */
+    else print_help();
+    
+    /* attempt to unlink any file residing in CSOCK_PATH */
+    if(unlink(CSOCK_PATH) < 0 && errno != ENOENT) {
+        fprintf(stderr, "failed to remove file at %s\n", CSOCK_PATH);
+        perror("guru meditation");
+        exit(1);
+    }
 
-	/* add client socket to epoll interest list */
-	client_event.events = EPOLLIN;
-	client_event.data.fd = client_socket;
-	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &client_event) < 0) {
-		fprintf(stderr, "failed to add client to interest list");
-		close(client_socket);
-		return -1;
-	}
+    /* initialize client socket and addressing information */
+    if((client_socket = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) {
+        fprintf(stderr, "failed to bind client socket\n");
+        exit(1);
+    }        
+    memset(&client_addr, 0, sizeof(struct sockaddr_un));
+    client_addr.sun_family = AF_UNIX;
+    snprintf(client_addr.sun_path, sizeof client_addr.sun_path, "%s", CSOCK_PATH);
 
-	return client_socket;
-}
+    if(bind(client_socket, (struct sockaddr *)&client_addr, sizeof(struct sockaddr_un)) < 0) {
+        fprintf(stderr, "failed to bind client socket\n");
+        perror("guru meditation");
+        exit(1);
+    }
 
-/* receive data from the client and then compare it to some flag / generated data; customize this function as needed*/
-void handle_client(int client_socket) {
-	unsigned char recv_buffer[RECV_SIZE];
-	unsigned int recvd_msg_size = 0;
+    /* initialize server socket addressing information */
+    memset(&server_addr, 0, sizeof(struct sockaddr_un));
+    server_addr.sun_family = AF_UNIX;
+    snprintf(server_addr.sun_path, sizeof server_addr.sun_path, "%s", SOCK_PATH);
 
-	/* receive only one message up to (RECV_SIZE - 1) bytes in size */
-	do {
-		if(interrupt == true) {	// implement graceful shutdown
-			close(client_socket);
-			return;
-		}
+    /* send input to daemon */
+    if(sendto(client_socket, &client_input, sizeof(input), 0, (struct sockaddr *)&server_addr, sizeof(struct sockaddr_un)) < 0) {
+        fprintf(stderr, "failed to send message to daemon\n");
+        exit(1);
+    }
+    
+    for(;;) {
+        if(recvfrom(client_socket, answer, 128, 0, NULL, NULL) < 0) {
+            fprintf(stderr, "failed to receive reply from server\n");
+            perror("guru meditation");
+            exit(1);
+        }
+        
+        if(*answer == 127) break;
+        printf("%s", answer);
+    }
 
-		if((recvd_msg_size += recv(client_socket, recv_buffer + recvd_msg_size, RECV_SIZE - 1, 0)) < 0) {
-			fprintf(stderr, "failed to receive from client socket: accepting next connection ...\n");
-			close(client_socket);
-			return;
-		}
-	} while(recvd_msg_size < 0);
-
-	recv_buffer[recvd_msg_size] = '\0';     // always end your sentence ;)
-	printf("%s", recv_buffer);      // simple action for now, will change
-	if((strcmp(recv_buffer, "flag{flag}\n")) != 0) send(client_socket, "wrong flag!\n", 16, 0);
-	else send(client_socket, "correct flag!\n", 16, 0);
-
-	close(client_socket);	// file descriptor is automatically removed from interest list upon closing
-}
-
-int main(void) {
-	int client_socket, server_socket, client_registry[MAX_CLIENTS], epoll_fd, number_fds, tmp_fd;
-	struct sockaddr_in server_addr;
-	struct epoll_event listener_event;
-	struct epoll_event ready_sockets[MAX_CLIENTS + 1];	// leave room for the listener
-
-	memset(client_registry, 0, sizeof(int) * MAX_CLIENTS);	// zero out registry to ensure things work smoothly in main loop
-
-	/* set custom handler for SIGINT */
-	struct sigaction handler;
-	handler.sa_handler = handle_signal;
-	if(sigfillset(&handler.sa_mask) < 0) {
-		fprintf(stderr, "failed to set signal masks\n");
-		exit(1);
-	}
-
-	handler.sa_flags = 0;	// no sa_flags
-	if(sigaction(SIGINT, &handler, 0) < 0) {
-		fprintf(stderr, "failed to set new handler for SIGINT\n");
-		exit(1);
-	}
-
-	/* set custom handler for SIGPIPE; uses same handler as SIGINT but gets ignored */
-	if(sigaction(SIGPIPE, &handler, 0) < 0) {
-		fprintf(stderr, "failed to set new handler for SIGPIPE\n");
-		exit(1);
-	}
-
-	/* spawn socket and prepare it for binding */
-	if((server_socket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
-		fprintf(stderr, "failed to create server socket\n");
-		exit(1);
-	}
-
-	if(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {	// be vanquished, foul error!
-		fprintf(stderr, "failed to set reusable option on listening socket\n");
-		exit(1);
-	}
-
-	memset(&server_addr, 0, sizeof server_addr);	// zero out to prevent ~~BAD VOODOO~~
-	server_addr.sin_family = AF_INET;
-	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	server_addr.sin_port = htons(PORT);
-
-	/* bind and listen */
-	if(bind(server_socket, (struct sockaddr *)&server_addr, sizeof server_addr) < 0) {
-		fprintf(stderr, "failed to bind socket to port\n");
-		exit(1);
-	}
-
-	if(listen(server_socket, 64) < 0) {
-		fprintf(stderr, "server socket failed to listen\n");
-		exit(1);
-	}
-
-	/* epoll setup */
-	if((epoll_fd = epoll_create(MAX_CLIENTS + 1)) < 0) {	// size argument to epoll_create() is ignored, but required
-		fprintf(stderr, "failed to create epoll file descriptor\n");
-		close(server_socket);
-		exit(1);
-	}
-
-	/* add listener to epoll interest list */
-	listener_event.events = EPOLLIN;
-	listener_event.data.fd = server_socket;
-	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_socket, &listener_event) < 0) {
-		fprintf(stderr, "failed to add listener to interest list\n");
-		close(epoll_fd);
-		close(server_socket);
-		exit(1);
-	}
-
-	/* main loop; blocks on epoll_wait() and then either accepts a new client or handles client data for "ready" sockets */
-	while(interrupt != true) {
-
-		/* block until an arbitrary amount of sockets are "ready" */
-		if((number_fds = epoll_wait(epoll_fd, ready_sockets, MAX_CLIENTS + 1, -1)) < 0) {
-			fprintf(stderr, "failed on epoll_wait() for some reason, probably due to SIGINT\n");
-			continue;
-		}
-
-		/* loop through "ready" sockets */
-		for(int i = 0; i < number_fds; ++i) {
-			if((tmp_fd = ready_sockets[i].data.fd) == server_socket) {	// a new client is trying to connect
-				tmp_fd = accept_client(server_socket, epoll_fd);
-
-				/* add new client to registry */
-				for(int i = 0; i < MAX_CLIENTS; ++i) {
-					if(client_registry[i] == 0) {	// this isn't ideal, but works for our purposes
-						client_registry[i] = tmp_fd;
-						break;
-					}
-
-					if(i == MAX_CLIENTS - 1) {	// execute if array is full
-						send(tmp_fd, "too many clients! try again later ...\n", 48, 0);
-						close(tmp_fd);
-					}
-				}
-			}
-
-			else {	// a client has sent data
-				handle_client(tmp_fd);
-
-				/* remove client from registry */
-				for(int i = 0; i < MAX_CLIENTS; ++i) {
-					if(client_registry[i] == tmp_fd) {
-						close(tmp_fd);
-						client_registry[i] = 0;
-						break;
-					}
-				}
-			}
-		}
-	}
-
-	/* execute upon interrupt or epoll_wait() failure */
-
-	for(int i = 0; i < MAX_CLIENTS; ++i) if(client_registry[i] != 0) close(client_registry[i]);	// clean up registered clients
-
-	close(epoll_fd);
-	close(server_socket);
-	exit(0);
+    close(client_socket);
+    exit(0);
 }

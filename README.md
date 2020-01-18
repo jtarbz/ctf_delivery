@@ -4,10 +4,15 @@ remote boxes to cryptography or reverse-engineering oriented challenges, thus gi
 for this project was its utility in challenge creation for the inaugural calvert hall capture the flag competition.
 
 # use
-currently, the project exists in a barebones form; one will have to edit the `handle_client()` function in the source code in order
-to achieve any sort of custom functionality. luckily, the structure lends itself easily to this purpose - simply write your own
-operations and checks.
+this project constitutes a daemon (`deliveryd.c`) and its client controller (`delivery.c`), which can be used to start and monitor any networked ctf challenge
+that can be executed by the linux kernel. any individual challenge to be run is defined as a module - such modules should be documented in
+the `modules` folder, using the file `example.mod` as a template. the challenge executables that correspond to the module files should be stored in the
+`bin` folder, and should have names matching the names in their module files.
 
+any executable file can be used for a challenge module, including scripts that begin with a "shebang" invocation. please refer to the client controller help text
+for additional usage information.
+
+I NEED TO MAKE THIS README WAY BETTER I KNOW
 # author
 **jason walter** - sole creator and god of this world
 

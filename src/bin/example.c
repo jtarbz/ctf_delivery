@@ -157,7 +157,6 @@ int main(void) {
 
 	/* main loop; blocks on epoll_wait() and then either accepts a new client or handles client data for "ready" sockets */
 	while(interrupt != true) {
-
 		/* block until an arbitrary amount of sockets are "ready" */
 		if((number_fds = epoll_wait(epoll_fd, ready_sockets, MAX_CLIENTS + 1, -1)) < 0) {
 			fprintf(stderr, "[EXAMPLE] failed on epoll_wait() for some reason, probably due to SIGINT\n");

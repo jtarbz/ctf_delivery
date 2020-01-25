@@ -8,12 +8,15 @@
 #include <sys/un.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <errno.h>
 
 #include "delivery.h"
 
 #define MAX_MODULES 64
+
+extern char **environ;	// for start_module()
 
 /* structure for holding module information */
 typedef struct module {
@@ -27,10 +30,10 @@ typedef struct module {
 /* start a module given its file descriptor, and return the resulting process' pid */
 int start_module(int fd, char *name, FILE *error_file) {
 	int pid = fork();
-	char *dumb_required_argument[] = {name, 0};
+	char *child_argv[] = {name, 0};
 	
 	if(pid == 0) {
-		fexecve(fd, dumb_required_argument, dumb_required_argument);	// instead of actually passing an environment, we'll just pretend that we did
+		fexecve(fd, child_argv, environ);
 		/* successful call never returns ... */
 		fprintf(error_file, "call to fexecve returned, meaning that something went horribly wrong\n");
 		exit(1);
